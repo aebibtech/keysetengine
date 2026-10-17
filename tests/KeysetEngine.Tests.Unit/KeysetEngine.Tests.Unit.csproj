@@ -12,6 +12,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\KeysetEngine.Core\KeysetEngine.Core.csproj" />
     <ProjectReference Include="..\..\src\KeysetEngine.DataProtection\KeysetEngine.DataProtection.csproj" />
+    <ProjectReference Include="..\..\src\KeysetEngine.PostgreSql\KeysetEngine.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\KeysetEngine.SqlServer\KeysetEngine.SqlServer.csproj" />
   </ItemGroup>
 
   <ItemGroup>
