@@ -4,8 +4,9 @@
   "private": true,
   "description": "Documentation for KeysetEngine - High-performance .NET keyset pagination library",
   "scripts": {
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
+    "generate:llms": "node scripts/generate-llms-full.mjs",
+    "docs:dev": "npm run generate:llms && vitepress dev docs",
+    "docs:build": "npm run generate:llms && vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {

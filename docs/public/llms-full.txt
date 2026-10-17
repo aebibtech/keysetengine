@@ -1,0 +1,1538 @@
+# KeysetEngine — Complete Documentation & Technical Reference
+Repository: https://github.com/aebibtech/keysetengine
+Documentation: https://keysetengine.aebibtech.com
+License: MIT
+Target Frameworks: .NET 8.0, .NET 9.0, .NET 10.0
+
+This file provides the complete, concatenated documentation for KeysetEngine formatted as unformatted Markdown for LLMs and AI coding assistants.
+
+================================================================================
+TABLE OF CONTENTS
+1. index.md
+2. guide/getting-started.md
+3. guide/why-keyset.md
+4. guide/faq.md
+5. guide/architecture.md
+6. guide/bidirectional.md
+7. guide/search.md
+8. guide/indexing.md
+9. security/data-protection.md
+10. databases/postgresql.md
+11. databases/sqlserver.md
+12. databases/sqlite.md
+13. api/core.md
+14. api/data-protection.md
+15. api/postgresql.md
+16. api/sqlserver.md
+================================================================================
+
+
+
+================================================================================
+FILE: index.md
+================================================================================
+
+## Quick Look
+
+```csharp
+// 1. Configure pagination boundary in Program.cs
+builder.Services.AddKeysetPagination(options =>
+{
+    options.Configure<Order>(builder => builder
+        .SortBy(x => x.CreatedAt, ascending: false)
+        .TieBreakBy(x => x.Id)
+        .SearchIn(x => x.CustomerName, x => x.OrderNumber));
+});
+
+// 2. Query in an ASP.NET Core Minimal API
+app.MapGet("/api/orders", async (
+    [AsParameters] KeysetRequest request,
+    AppDbContext db,
+    ICursorProtector protector,
+    CancellationToken ct) =>
+{
+    var page = await db.Orders
+        .AsNoTracking()
+        .ToKeysetPageAsync(request, protector, ct);
+
+    return Results.Ok(page);
+});
+```
+
+::: tip High Throughput at Deep Offsets
+Unlike standard SQL `OFFSET 100000 LIMIT 20` which forces your database engine to scan and discard 100,000 index entries, `KeysetEngine` translates queries directly into composite index seeks:
+```sql
+WHERE ("CreatedAt" < @val) OR ("CreatedAt" = @val AND "Id" < @tieVal)
+ORDER BY "CreatedAt" DESC, "Id" DESC
+LIMIT 21
+```
+Execution time remains consistently **under 1 millisecond**, regardless of table size.
+:::
+
+
+================================================================================
+FILE: guide/getting-started.md
+================================================================================
+
+# Overview & Installation
+
+::: tip Direct Answer (Executive Summary)
+**KeysetEngine** is a high-performance keyset pagination and search engine for .NET 8, 9, and 10 with Entity Framework Core. It replaces $O(N)$ SQL `OFFSET` with $O(1)$ composite index seeks (`WHERE SortCol < @val OR (SortCol = @val AND Id < @tieVal)`). It features cryptographic cursor encryption via ASP.NET Core Data Protection, automatic stale-cursor invalidation, and native database adapters for PostgreSQL and SQL Server.
+:::
+
+**KeysetEngine** is a high-throughput, database-agnostic keyset pagination and search engine for .NET and Entity Framework Core. It targets modern LTS and Current .NET runtimes: **.NET 8.0**, **.NET 9.0**, and **.NET 10.0**.
+
+---
+
+## Package Topology
+
+The library is divided into specialized packages:
+
+| Package | NuGet | Purpose |
+| :--- | :--- | :--- |
+| **`KeysetEngine.Core`** | [![NuGet](https://img.shields.io/nuget/v/KeysetEngine.Core.svg)](https://www.nuget.org/packages/KeysetEngine.Core) | Core domain models, expression tree generation, universal search, and `IQueryable<T>` extensions. |
+| **`KeysetEngine.DataProtection`** | [![NuGet](https://img.shields.io/nuget/v/KeysetEngine.DataProtection.svg)](https://www.nuget.org/packages/KeysetEngine.DataProtection) | Cryptographic token protection using ASP.NET Core Data Protection with purpose isolation. |
+| **`KeysetEngine.PostgreSql`** | [![NuGet](https://img.shields.io/nuget/v/KeysetEngine.PostgreSql.svg)](https://www.nuget.org/packages/KeysetEngine.PostgreSql) | PostgreSQL-native search strategies (`EF.Functions.ILike` and `tsvector` full-text search). |
+| **`KeysetEngine.SqlServer`** | [![NuGet](https://img.shields.io/nuget/v/KeysetEngine.SqlServer.svg)](https://www.nuget.org/packages/KeysetEngine.SqlServer) | SQL Server-native search strategies (`EF.Functions.FreeText`, `CONTAINS`, and collation). |
+
+---
+
+## Installation
+
+Install the core package and the cryptographic data protection provider via the .NET CLI:
+
+::: code-group
+
+```bash [Core + DataProtection]
+dotnet add package KeysetEngine.Core
+dotnet add package KeysetEngine.DataProtection
+```
+
+```bash [PostgreSQL Stack]
+dotnet add package KeysetEngine.Core
+dotnet add package KeysetEngine.DataProtection
+dotnet add package KeysetEngine.PostgreSql
+```
+
+```bash [SQL Server Stack]
+dotnet add package KeysetEngine.Core
+dotnet add package KeysetEngine.DataProtection
+dotnet add package KeysetEngine.SqlServer
+```
+
+:::
+
+---
+
+## 3-Step Quickstart
+
+### Step 1: Register Services
+
+In your application entry point (`Program.cs`), register KeysetEngine and configure your entity boundaries:
+
+```csharp
+using KeysetEngine.Core.Configuration;
+using KeysetEngine.DataProtection;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Register ASP.NET Core Data Protection (required for secure cursor tokens)
+builder.Services.AddDataProtection();
+builder.Services.AddKeysetDataProtection();
+
+// Register KeysetEngine and configure entity mappings
+builder.Services.AddKeysetPagination(options =>
+{
+    options.Configure<Order>(b => b
+        .SortBy(x => x.CreatedAt, ascending: false)
+        .TieBreakBy(x => x.Id)
+        .SearchIn(x => x.CustomerName, x => x.OrderNumber));
+});
+```
+
+::: tip Explicit vs Registry Configuration
+Configuring entities via `options.Configure<T>()` registers them into `KeysetConfigRegistry`, allowing you to invoke `ToKeysetPageAsync(request, protector)` without passing the config instance to every endpoint.
+:::
+
+---
+
+### Step 2: Define Endpoint with `KeysetRequest`
+
+Expose an endpoint accepting `[AsParameters] KeysetRequest`:
+
+```csharp
+app.MapGet("/api/orders", async (
+    [AsParameters] KeysetRequest request,
+    AppDbContext db,
+    ICursorProtector protector,
+    CancellationToken ct) =>
+{
+    var page = await db.Orders
+        .AsNoTracking()
+        .ToKeysetPageAsync(request, protector, ct);
+
+    return Results.Ok(page);
+});
+```
+
+---
+
+### Step 3: Consume Paginated Response
+
+The returned `KeysetPage<T>` contains:
+
+```json
+{
+  "items": [
+    {
+      "id": "018f4a1a-3e81-7d12-9842-8871ab14299b",
+      "customerName": "Alice Johnson",
+      "orderNumber": "ORD-1002",
+      "createdAt": "2026-10-17T12:00:00Z"
+    }
+  ],
+  "startCursor": "CfDJ8MvV2...",
+  "endCursor": "CfDJ8MvV2...",
+  "hasNextPage": true,
+  "hasPreviousPage": false
+}
+```
+
+To fetch the next page, send the `endCursor` as the `cursor` query parameter:
+
+```http
+GET /api/orders?cursor=CfDJ8MvV2...&limit=20 HTTP/1.1
+```
+
+To navigate backward, specify `direction=Backward` with the `startCursor`:
+
+```http
+GET /api/orders?cursor=CfDJ8MvV2...&direction=Backward&limit=20 HTTP/1.1
+```
+
+
+================================================================================
+FILE: guide/why-keyset.md
+================================================================================
+
+# Why Keyset Pagination?
+
+::: tip Direct Answer (Executive Summary)
+**SQL OFFSET degrades linearly $O(N)$** because database engines must scan and discard all preceding rows (e.g. `OFFSET 100000` scans 100,020 rows), causing high latency, CPU spikes, and data drift during concurrent writes. **Keyset pagination runs in constant time $O(1)$** by seeking directly to index boundaries via values (`WHERE CreatedAt < @lastDate`). KeysetEngine eliminates SQL OFFSET performance cliffs while preventing missing or duplicate rows.
+:::
+
+Traditional offset-based pagination (using `.Skip(page * pageSize).Take(pageSize)` in LINQ or `OFFSET x ROWS FETCH NEXT y ROWS` in SQL) suffers from fatal scalability and concurrency issues when querying modern, high-volume datasets.
+
+---
+
+## The $O(N)$ Pitfall of SQL `OFFSET`
+
+Relational database engines (PostgreSQL, SQL Server, MySQL, SQLite) do not have random-access memory address pointers to arbitrary row offsets. When you execute:
+
+```sql
+SELECT * FROM "Orders"
+ORDER BY "CreatedAt" DESC
+OFFSET 100000 ROWS FETCH NEXT 20 ROWS ONLY;
+```
+
+The database query engine must:
+1. Traverse the index (or scan the entire table) for **100,020 rows**.
+2. Sort and evaluate all 100,020 rows in memory or disk worktables.
+3. Discard the first 100,000 rows.
+4. Return only the final 20 rows to the client.
+
+As the offset increases, query execution time scales linearly $O(N)$, causing severe latency spikes, buffer cache thrashing, and high database CPU utilization.
+
+```
+Execution Time vs. Page Depth
+Latency (ms)
+    ▲
+500 ┼                                        ● Offset (Degrades O(N))
+400 ┼                                   ●
+300 ┼                             ●
+200 ┼                       ●
+100 ┼                 ●
+ 10 ┼───────────────●──────────────────────── Keyset Engine (Stable O(1))
+    └────────────────────────────────────────► Page Depth / Offset
+      1     1,000   10,000  50,000  100,000
+```
+
+---
+
+## Keyset Pagination: The $O(1)$ Indexed Seek
+
+Keyset pagination (also known as the **cursor pattern** or **seek method**) replaces arbitrary numerical offsets with value-based boundary conditions based on the sorted values of the last retrieved item.
+
+Instead of asking the database to count past 100,000 rows, KeysetEngine asks:
+> *"Give me the next 20 rows that appear immediately after the item with `CreatedAt = '2026-10-17 12:00:00'` and `Id = 45981'`."*
+
+The resulting SQL query directly uses a composite index seek:
+
+```sql
+SELECT * FROM "Orders"
+WHERE ("CreatedAt" < @p0) OR ("CreatedAt" = @p0 AND "Id" < @p1)
+ORDER BY "CreatedAt" DESC, "Id" DESC
+FETCH NEXT 21 ROWS ONLY;
+```
+
+Because the database engine navigates directly to the specific leaf node in the B-Tree index, **execution time is virtually identical whether querying row 0 or row 10,000,000**.
+
+---
+
+## Real-World Concurrency: The Missing / Duplicate Rows Bug
+
+Consider what happens in an offset-paginated system when new rows are inserted or deleted while a user is browsing:
+
+1. A user views Page 1 (rows 1–20).
+2. While reading, 5 new orders are inserted at the top of the table.
+3. The user navigates to Page 2 (`OFFSET 20`).
+4. **Result:** The user sees rows 16–20 again! Rows shift down, resulting in duplicate or missed records.
+
+**Keyset pagination is immune to this issue.** Because boundaries are pinned to immutable edge values, newly inserted rows never cause existing items to shift between pages.
+
+---
+
+## Why Not SQL Row-Value Tuples `(a, b) > (x, y)`?
+
+Some SQL dialects (PostgreSQL and SQLite) support row-value comparison syntax:
+
+```sql
+WHERE ("CreatedAt", "Id") < (@val1, @val2)
+```
+
+However:
+1. **SQL Server does NOT support SQL row-value tuple comparisons.**
+2. **Entity Framework Core cannot reliably translate C# tuple expressions** across different relational database providers, often leading to client-side evaluation or unindexed nested subqueries.
+
+### KeysetEngine's Solution: Universal Nested Booleans
+
+KeysetEngine generates portable, index-seekable boolean disjunction trees:
+
+$$\text{Forward Ascending} = (SortCol > val) \lor (SortCol == val \land TieBreaker > tieVal)$$
+$$\text{Forward Descending} = (SortCol < val) \lor (SortCol == val \land TieBreaker < tieVal)$$
+
+This generates identical, optimal execution plans across **PostgreSQL**, **Microsoft SQL Server**, **SQLite**, and **MySQL**.
+
+
+================================================================================
+FILE: guide/faq.md
+================================================================================
+
+# Frequently Asked Questions (FAQ)
+
+Direct, comprehensive answers to common questions about **KeysetEngine**, keyset pagination mechanics, security, database compatibility, and troubleshooting.
+
+---
+
+## General Concepts & Architecture
+
+### What is Keyset Pagination and how does it differ from SQL OFFSET?
+Keyset pagination (also called the cursor or seek method) avoids numeric row offsets by filtering queries based on the values of the last record seen (e.g. `WHERE CreatedAt < @lastDate OR (CreatedAt = @lastDate AND Id < @lastId)`). 
+
+Unlike SQL `OFFSET 100000`, which requires the database engine to scan and discard 100,000 rows ($O(N)$ execution), keyset pagination performs a direct B-tree **Index Seek** ($O(1)$ execution), maintaining sub-millisecond query latency regardless of table size.
+
+---
+
+### Why does SQL OFFSET degrade on large tables?
+Relational databases do not store physical memory pointers to arbitrary row offsets. When `OFFSET 50000 FETCH NEXT 20` is executed, the database engine must traverse the index, evaluate 50,020 rows, hold or sort them in temporary buffers, discard the first 50,000, and return only 20. This causes linear performance degradation, high CPU utilization, and buffer pool churn.
+
+---
+
+### Why does KeysetEngine use nested boolean disjunctions instead of SQL row-value syntax `(a, b) > (x, y)`?
+While PostgreSQL and SQLite support SQL row-value comparisons:
+```sql
+WHERE ("CreatedAt", "Id") < (@p0, @p1)
+```
+**Microsoft SQL Server does not support row-value comparison syntax.** Furthermore, Entity Framework Core relational translators cannot reliably map C# tuple comparisons to SQL row values across database providers without causing client-side evaluation warnings.
+
+KeysetEngine generates universal nested boolean trees:
+```csharp
+(SortCol > val) || (SortCol == val && TieBreaker > tieVal)
+```
+which translate identically and cleanly into index seeks across **PostgreSQL**, **SQL Server**, **SQLite**, **MySQL**, and **Oracle**.
+
+---
+
+### How does the $N+1$ slicing algorithm eliminate `COUNT(*)` queries?
+Standard pagination UI often runs a separate `SELECT COUNT(*) FROM Table` query to determine if next pages exist or to display page counts. On large tables, `COUNT(*)` causes expensive sequential scans.
+
+KeysetEngine queries `Take(limit + 1)`. If the database returns `limit + 1` records, KeysetEngine knows immediately that a subsequent page exists, removes the extra item from the slice, sets `HasNextPage = true`, and returns the page—all in **a single database roundtrip**.
+
+---
+
+## Traversal & Security
+
+### How does backward pagination work without extra database roundtrips?
+When traversing backward (`PageDirection.Backward`):
+1. KeysetEngine inverts comparison operators ($< \rightarrow >$ or $> \rightarrow <$).
+2. KeysetEngine inverts the SQL `ORDER BY` clause so the database seeks backward from the start cursor.
+3. Once the database returns the preceding slice, KeysetEngine performs an **in-memory reversal** (`items.Reverse()`) before returning `KeysetPage<T>`.
+
+The consumer application always receives items in natural, chronological order without any client-side sorting required.
+
+---
+
+### How does KeysetEngine protect cursor tokens against tampering and ID enumeration?
+`KeysetEngine.DataProtection` uses **ASP.NET Core Data Protection** to encrypt and cryptographically sign every cursor token using authenticated encryption (AES-256-GCM / HMAC-SHA256).
+
+- **Purpose Isolation**: Tokens are scoped with hierarchical sub-purposes: `KeysetEngine:{entityPurpose}:v1`. A token created for `/api/orders` cannot be decrypted or reused on `/api/customers`.
+- **Tenant Isolation**: Developers can append tenant IDs to `entityPurpose` to prevent cross-tenant token replay attacks.
+- **Graceful Fallback**: If an attacker tampers with a token, or if a token is malformed or expired, `DataProtectionCursorProtector` catches cryptographic exceptions safely and returns `null`. KeysetEngine treats this as a fresh query and returns Page 1, preventing 500 errors.
+
+---
+
+### What happens if a user submits an active cursor after modifying their search term? (Stale Cursor Invalidation)
+When users paginate through search results, they may change their query text while holding a cursor from a previous search. Applying an old cursor to a new filter skips records or yields invalid boundaries.
+
+KeysetEngine calculates a query signature hash (`SearchHashUtility`) and embeds it within the cursor token. If `request.Search` differs from the token's `SearchHash`, KeysetEngine **automatically invalidates the cursor and restarts cleanly from Page 1**.
+
+---
+
+## Databases & Performance
+
+### What database indexes are required for keyset pagination?
+To achieve $O(1)$ index seek performance, you must create a **composite B-tree index** covering both the sort column and the tie-breaker:
+
+```csharp
+// EF Core Fluent API
+modelBuilder.Entity<Order>()
+    .HasIndex(o => new { o.CreatedAt, o.Id })
+    .HasDatabaseName("IX_Orders_CreatedAt_Id");
+```
+
+For multi-tenant systems, place the tenant partition column first:
+```csharp
+modelBuilder.Entity<Order>()
+    .HasIndex(o => new { o.TenantId, o.CreatedAt, o.Id });
+```
+
+---
+
+### How do I use PostgreSQL-native ILIKE or tsvector full-text search?
+Install `KeysetEngine.PostgreSql` and register the strategy in `Program.cs`:
+
+```csharp
+builder.Services.AddKeysetPagination(options =>
+{
+    // Use EF.Functions.ILike (pairs with pg_trgm GIN indexes)
+    options.UsePostgreSqlSearch();
+
+    // Or use PostgreSQL tsvector full-text search
+    // options.UsePostgreSqlTsVectorSearch(regConfig: "english");
+});
+```
+
+---
+
+### How do I use SQL Server Full-Text Search?
+Install `KeysetEngine.SqlServer` and register the strategy in `Program.cs`:
+
+```csharp
+builder.Services.AddKeysetPagination(options =>
+{
+    // Uses EF.Functions.FreeText() or EF.Functions.Contains()
+    options.UseSqlServerFullTextSearch(useContains: false);
+
+    // Or use collation-aware LIKE search (avoids ToLower())
+    // options.UseSqlServerCollationSearch();
+});
+```
+
+---
+
+### How do I unit test KeysetEngine without ASP.NET Core Data Protection?
+Use `Base64UrlCursorProtector.Instance` from `KeysetEngine.Core`:
+
+```csharp
+var page = await db.Orders.ToKeysetPageAsync(
+    request,
+    config,
+    Base64UrlCursorProtector.Instance);
+```
+This performs simple URL-safe serialization without requiring cryptographic key storage during tests.
+
+---
+
+### Which .NET and Entity Framework Core versions are supported?
+KeysetEngine multi-targets:
+- **.NET 8.0 (LTS)** with EF Core 8.x
+- **.NET 9.0 (Current)** with EF Core 9.x
+- **.NET 10.0 (LTS)** with EF Core 10.x
+
+
+================================================================================
+FILE: guide/architecture.md
+================================================================================
+
+# Pipeline & Expressions
+
+::: tip Direct Answer (Executive Summary)
+KeysetEngine compiles pagination queries dynamically into database-native LINQ expressions in five stages: (1) Decrypt cursor with `ICursorProtector`, (2) Append multi-column search predicate, (3) Append universal nested boolean keyset inequality (`(SortCol > val) OR (SortCol = val AND Id > tieVal)`), (4) Apply dynamic `OrderBy/ThenBy` with bidirectional inversion, and (5) Slice with `.Take(limit + 1)` to evaluate `HasNextPage` without running `COUNT(*)`.
+:::
+
+KeysetEngine translates incoming pagination requests and configuration definitions into pure, index-seekable LINQ expression trees without triggering EF Core client-side evaluation.
+
+---
+
+## High-Level Execution Lifecycle
+
+```
+[ HTTP Request (Cursor, Limit, Direction, Search) ]
+                         │
+                         ▼
+             [ ICursorProtector ]
+         (Decrypt & Validate Opaque Token)
+                         │
+                         ▼
+        [ Dynamic Text Search Predicate ]
+            (EF.Functions or Lower/Contains)
+                         │
+                         ▼
+        [ Keyset Inequality Predicate ]
+         (Universal Nested Boolean Tree)
+                         │
+                         ▼
+       [ Dynamic OrderBy / ThenBy Inversion ]
+     (Inverted if Direction == Backward)
+                         │
+                         ▼
+               [ Take(limit + 1) ]
+       (Single SQL Roundtrip to Database)
+                         │
+                         ▼
+        [ Slice Evaluation & In-Memory Reversal ]
+    (Restore chronological order if Backward)
+                         │
+                         ▼
+        [ Cryptographic Edge Cursor Generation ]
+           (startCursor & endCursor Tokens)
+                         │
+                         ▼
+               [ KeysetPage<T> ]
+```
+
+---
+
+## 1. Universal Keyset Inequalities
+
+When a valid cursor token is supplied, `KeysetExpressionBuilder` dynamically constructs an `Expression<Func<T, bool>>` representing the boundary condition:
+
+### Ascending Order
+- **Forward Traversal**:
+  ```csharp
+  x => (x.SortCol > sortVal) || (x.SortCol == sortVal && x.TieBreaker > tieVal)
+  ```
+- **Backward Traversal**:
+  ```csharp
+  x => (x.SortCol < sortVal) || (x.SortCol == sortVal && x.TieBreaker < tieVal)
+  ```
+
+### Descending Order
+- **Forward Traversal**:
+  ```csharp
+  x => (x.SortCol < sortVal) || (x.SortCol == sortVal && x.TieBreaker < tieVal)
+  ```
+- **Backward Traversal**:
+  ```csharp
+  x => (x.SortCol > sortVal) || (x.SortCol == sortVal && x.TieBreaker > tieVal)
+  ```
+
+### Invariant Property Typing
+`KeysetExpressionBuilder` automatically detects the underlying runtime types of `SortProperty` and `TieBreakerProperty` (including primitives, `DateTime`, `DateTimeOffset`, `DateOnly`, `Guid`, and `string`), deserializes JSON values from the token into strongly-typed constants, and invokes `Expression.GreaterThan`, `Expression.LessThan`, and `Expression.Equal` appropriately.
+
+---
+
+## 2. Dynamic Ordering Helper
+
+`DynamicOrderHelper` dynamically constructs `IQueryable<T>.OrderBy`, `OrderByDescending`, `ThenBy`, and `ThenByDescending` calls using reflection and expression compilation.
+
+### Automatic Direction Inversion
+When traversing **backward**, the SQL `ORDER BY` clause must be inverted so the database scans in reverse order from the cursor boundary:
+
+| Config Direction | Requested Navigation | Emitted SQL Order |
+| :--- | :--- | :--- |
+| Ascending (`true`) | `PageDirection.Forward` | `ORDER BY SortCol ASC, TieBreaker ASC` |
+| Ascending (`true`) | `PageDirection.Backward` | `ORDER BY SortCol DESC, TieBreaker DESC` |
+| Descending (`false`) | `PageDirection.Forward` | `ORDER BY SortCol DESC, TieBreaker DESC` |
+| Descending (`false`) | `PageDirection.Backward` | `ORDER BY SortCol ASC, TieBreaker ASC` |
+
+---
+
+## 3. The $N + 1$ Slicing Strategy
+
+Standard pagination often requires a separate `COUNT(*)` query to determine whether subsequent pages exist. On large tables, `COUNT(*)` is an expensive full-table or full-index scan.
+
+KeysetEngine completely avoids `COUNT(*)` by requesting **$N + 1$** items:
+
+```csharp
+source = source.Take(limit + 1);
+List<T> items = await source.ToListAsync(cancellationToken);
+```
+
+### Page Boundary Detection
+- If `items.Count > limit`, a subsequent page exists. KeysetEngine removes the extra item before returning the slice.
+- `HasNextPage` and `HasPreviousPage` are calculated immediately based on traversal direction and cursor presence.
+
+```csharp
+bool hasMoreInDirection = items.Count > limit;
+if (hasMoreInDirection)
+{
+    items.RemoveAt(items.Count - 1);
+}
+
+if (request.Direction == PageDirection.Forward)
+{
+    hasPreviousPage = cursorToken is not null;
+    hasNextPage = hasMoreInDirection;
+}
+else
+{
+    hasPreviousPage = hasMoreInDirection;
+    hasNextPage = true;
+    items.Reverse(); // In-memory reversal
+}
+```
+
+
+================================================================================
+FILE: guide/bidirectional.md
+================================================================================
+
+# Bidirectional Traversal
+
+KeysetEngine natively supports bidirectional traversal (moving forward to next pages and backward to previous pages) without storing server-side state or sessions.
+
+---
+
+## The Navigation Model
+
+Every `KeysetPage<T>` returns two edge boundary tokens:
+- **`StartCursor`**: Represents the first item in the current page slice.
+- **`EndCursor`**: Represents the last item in the current page slice.
+
+```
+                  ┌───────────────────────────────┐
+                  │          Current Page         │
+                  │ [Item 1] ... [Item 20]        │
+                  └──────┬────────────────┬───────┘
+                         │                │
+                    StartCursor        EndCursor
+                         │                │
+        Direction: Backward               Direction: Forward
+                 │                                │
+                 ▼                                ▼
+       ┌───────────────────┐            ┌───────────────────┐
+       │   Previous Page   │            │     Next Page     │
+       └───────────────────┘            └───────────────────┘
+```
+
+---
+
+## Moving Forward
+
+To fetch the next page of results, pass the `EndCursor` and specify `PageDirection.Forward` (the default):
+
+```http
+GET /api/orders?cursor={EndCursor}&direction=Forward&limit=20 HTTP/1.1
+```
+
+KeysetEngine applies:
+1. Inequality predicate seeking items *after* the `EndCursor`.
+2. Standard SQL `ORDER BY` matching your entity configuration.
+3. Takes `limit + 1` items in natural forward sequence.
+
+---
+
+## Moving Backward
+
+When the user clicks "Previous Page", send the `StartCursor` and specify `PageDirection.Backward`:
+
+```http
+GET /api/orders?cursor={StartCursor}&direction=Backward&limit=20 HTTP/1.1
+```
+
+### The Inversion & In-Memory Reversal Process
+To navigate backward efficiently without rescanning from the beginning of the table:
+1. **Inequality Inversion**: The comparison operator is inverted ($< \rightarrow >$ or $> \rightarrow <$) to look backwards from `StartCursor`.
+2. **SQL `ORDER BY` Inversion**: The query orders items backwards from the cursor edge to retrieve the preceding 20 items.
+3. **In-Memory Reversal**: Because the database returned the items in reverse chronological order, KeysetEngine automatically invokes `.Reverse()` on the returned list before returning `KeysetPage<T>`.
+
+::: tip Zero Client-Side Complexity
+Your frontend or consumer application always receives items in natural, expected order (e.g., newest to oldest). You never need to sort or reverse items on the client.
+:::
+
+---
+
+## Full Traversal Loop Example
+
+```csharp
+// 1. Fetch First Page
+var page1 = await db.Orders.ToKeysetPageAsync(
+    new KeysetRequest(Limit: 20),
+    config,
+    protector);
+
+// 2. Fetch Second Page (Forward)
+var page2 = await db.Orders.ToKeysetPageAsync(
+    new KeysetRequest(Cursor: page1.EndCursor, Direction: PageDirection.Forward, Limit: 20),
+    config,
+    protector);
+
+// 3. Navigate back to First Page (Backward)
+var backToPage1 = await db.Orders.ToKeysetPageAsync(
+    new KeysetRequest(Cursor: page2.StartCursor, Direction: PageDirection.Backward, Limit: 20),
+    config,
+    protector);
+
+// Assert: backToPage1.Items contains identical entities as page1.Items in exact same order!
+```
+
+
+================================================================================
+FILE: guide/search.md
+================================================================================
+
+# Dynamic Search & Stale Cursors
+
+::: tip Direct Answer (Executive Summary)
+KeysetEngine enables multi-column full-text search across entities (`builder.SearchIn(...)`) while preserving keyset boundaries. To prevent corrupted page offsets when users change filters mid-pagination, KeysetEngine embeds a search hash in every cursor token via `SearchHashUtility`; when the search term changes, the cursor is automatically invalidated and safely restarts from Page 1.
+:::
+
+KeysetEngine combines dynamic multi-column text search with keyset pagination while preventing stale cursor mismatches and client-side evaluation warnings.
+
+---
+
+## Configuring Search Fields
+
+Use `SearchIn()` on `KeysetConfigBuilder<T>` to declare which string properties should be included in full-text filtering:
+
+```csharp
+var config = new KeysetConfigBuilder<Product>()
+    .SortBy(x => x.CreatedAt, ascending: false)
+    .TieBreakBy(x => x.Id)
+    .SearchIn(
+        x => x.Name,
+        x => x.Sku,
+        x => x.Description)
+    .Build();
+```
+
+When a user provides a search term in `KeysetRequest.Search`:
+
+```http
+GET /api/products?search=wireless&limit=20 HTTP/1.1
+```
+
+KeysetEngine constructs an `Expression.OrElse` tree combining all configured property selectors:
+
+```sql
+WHERE (
+    LOWER("Name") LIKE '%wireless%' OR
+    LOWER("Sku") LIKE '%wireless%' OR
+    LOWER("Description") LIKE '%wireless%'
+)
+AND (
+    ("CreatedAt" < @p0) OR ("CreatedAt" = @p0 AND "Id" < @p1)
+)
+```
+
+---
+
+## The Stale Cursor Problem
+
+In interactive web applications, users frequently type new search queries while holding an active cursor token from a previous search.
+
+### The Danger:
+If an application blindly applies a cursor from `search="laptop"` to a new query with `search="keyboard"`, the cursor boundary points to an arbitrary point in the newly filtered dataset, skipping items or returning inconsistent results.
+
+---
+
+## Automatic Invalidation with `SearchHashUtility`
+
+KeysetEngine embeds a cryptographic query signature hash into every emitted cursor token:
+
+```csharp
+public sealed record KeysetCursorToken(
+    string SortValueJson,
+    string TieBreakerValueJson,
+    bool IsAscending,
+    string? SearchHash // Non-cryptographic hash of current search term
+);
+```
+
+### Invalidation Algorithm
+When processing incoming requests in `ToKeysetPageAsync`:
+1. The incoming `request.Search` is hashed.
+2. The cursor token's `SearchHash` is compared against the current search hash using `SearchHashUtility.Matches()`.
+3. **If the search term changed**, KeysetEngine automatically discards the cursor and restarts cleanly from **Page 1**:
+
+```csharp
+// Stale cursor detection in KeysetQueryableExtensions
+if (cursorToken is not null && !SearchHashUtility.Matches(request.Search, cursorToken.SearchHash))
+{
+    cursorToken = null; // Seamlessly reset to Page 1
+}
+```
+
+::: tip Safe & Resilient
+Users never encounter 500 exceptions, corrupted pages, or out-of-order data when rapidly modifying search filters.
+:::
+
+
+================================================================================
+FILE: guide/indexing.md
+================================================================================
+
+# Index Design & Optimization
+
+::: tip Direct Answer (Executive Summary)
+Keyset pagination requires a **composite B-Tree index** on `(SortColumn, TieBreakerColumn)` (e.g. `(CreatedAt DESC, Id DESC)`). For multi-tenant databases, the tenant partition ID must be the leading column: `(TenantId, SortColumn, TieBreaker)`. This allows the database engine to perform an immediate **Index Seek** directly to the requested page boundary in $< 1\text{ms}$.
+:::
+
+To achieve true $O(1)$ query latency with KeysetEngine, relational database engines require properly designed composite B-Tree indexes matching your sort order and tie-breaker definitions.
+
+---
+
+## The Composite Index Rule
+
+For every paginated entity, define a composite index on:
+1. **Sort Property** (Primary sort order)
+2. **Tie-Breaker Property** (Unique identifier, typically Primary Key)
+
+### PostgreSQL (EF Core Fluent API)
+```csharp
+modelBuilder.Entity<Order>()
+    .HasIndex(o => new { o.CreatedAt, o.Id })
+    .HasDatabaseName("IX_Orders_CreatedAt_Id");
+```
+
+Generated PostgreSQL DDL:
+```sql
+CREATE INDEX "IX_Orders_CreatedAt_Id" ON "Orders" ("CreatedAt" DESC, "Id" DESC);
+```
+
+### SQL Server (EF Core Fluent API)
+```csharp
+modelBuilder.Entity<Order>()
+    .HasIndex(o => new { o.CreatedAt, o.Id })
+    .IsClustered(false)
+    .HasDatabaseName("IX_Orders_CreatedAt_Id");
+```
+
+Generated T-SQL DDL:
+```sql
+CREATE NONCLUSTERED INDEX [IX_Orders_CreatedAt_Id] 
+ON [dbo].[Orders] ([CreatedAt] DESC, [Id] DESC);
+```
+
+---
+
+## Multi-Tenant Indexing
+
+When partitioning data by tenant or organization ID, ensure the tenant filter is the **leading column** in the composite index:
+
+```csharp
+modelBuilder.Entity<Order>()
+    .HasIndex(o => new { o.TenantId, o.CreatedAt, o.Id })
+    .HasDatabaseName("IX_Orders_Tenant_CreatedAt_Id");
+```
+
+This guarantees that:
+- The database engine immediately seeks directly to the tenant's partition.
+- It then seeks directly into the keyset boundary using `(CreatedAt, Id)`.
+
+---
+
+## Verifying Index Seeks
+
+Always inspect your database execution plans to confirm that the database performs an **Index Seek** rather than an **Index Scan**:
+
+### PostgreSQL EXPLAIN ANALYZE
+```sql
+EXPLAIN ANALYZE
+SELECT * FROM "Orders"
+WHERE ("CreatedAt" < '2026-10-17 12:00:00') 
+   OR ("CreatedAt" = '2026-10-17 12:00:00' AND "Id" < '018f4a1a-3e81-7d12-9842-8871ab14299b')
+ORDER BY "CreatedAt" DESC, "Id" DESC
+LIMIT 21;
+```
+
+**Expected Result:**
+```
+->  Limit  (cost=0.43..8.45 rows=21 width=128) (actual time=0.035..0.048 rows=21 loops=1)
+      ->  Index Scan Backward using "IX_Orders_CreatedAt_Id" on "Orders"
+```
+Total execution time: **< 0.1ms**.
+
+### SQL Server Execution Plan
+Look for:
+- Operator: **Index Seek (NonClustered)**
+- Seek Predicates: `Prefix: [dbo].[Orders].[CreatedAt], [dbo].[Orders].[Id]`
+- Number of Executions: `1`
+
+
+================================================================================
+FILE: security/data-protection.md
+================================================================================
+
+# Cryptographic Protection & Cursor Tokens
+
+::: tip Direct Answer (Executive Summary)
+`KeysetEngine.DataProtection` protects cursor tokens using **ASP.NET Core Data Protection** (AES-256-GCM / HMAC-SHA256 authenticated encryption) with purpose isolation (`KeysetEngine:{entityPurpose}:v1`). It prevents internal primary key enumeration, cross-endpoint token reuse, and data leakage. When invalid or tampered tokens are supplied, it catches cryptographic exceptions and gracefully resets pagination to Page 1 instead of throwing 500 errors.
+:::
+
+Exposing raw database keys, sequential IDs, or simple Base64-encoded timestamps in API cursor tokens presents serious security and architectural risks.
+
+---
+
+## Why Plain or Base64 Cursors Are Dangerous
+
+Many naive cursor pagination implementations simply Base64-encode internal values:
+
+```json
+// Naive Base64 cursor: eyJDcmVhdGVkQXQiOiIyMDI2LTEwLTE3VDEyOjAwOjAwWiIsIklkIjoxMDA1fQ==
+// Decoded: {"CreatedAt":"2026-10-17T12:00:00Z","Id":1005}
+```
+
+### Vulnerabilities:
+1. **Data Leakage**: Sequential IDs reveal internal business volume, customer counts, and user registration velocity.
+2. **Scraping & Enumeration**: Attackers can forge cursors to bypass rate limits or scrape specific database partitions.
+3. **Cross-Endpoint Substitution**: A cursor generated for `/api/customers` could be sent to `/api/admin/audit-logs`, triggering unexpected behavior or privilege escalation.
+
+---
+
+## ASP.NET Core Data Protection Integration
+
+`KeysetEngine.DataProtection` integrates directly with **ASP.NET Core Data Protection** to encrypt and cryptographically sign every cursor token using authenticated encryption (AES-256-GCM / HMAC-SHA256).
+
+### 1. Sub-Purpose Isolation
+Cursors are cryptographically scoped with hierarchical sub-purposes:
+
+```csharp
+// Internally created by DataProtectionCursorProtector
+var protector = provider.CreateProtector("KeysetEngine", entityPurpose, "v1");
+```
+
+- A token generated for `Order` cannot be decrypted or used on `Customer`.
+- If an entity specifies a custom tenant purpose (e.g., `Order:tenant-acme`), tokens cannot be replayed across tenants.
+
+---
+
+## Graceful Error Handling & Tamper Resilience
+
+Clients may occasionally supply invalid, modified, expired, or corrupted cursor strings.
+
+`DataProtectionCursorProtector.Unprotect()` intercepts cryptographic exceptions internally:
+
+```csharp
+public KeysetCursorToken? Unprotect(string? opaqueCursor, string entityPurpose)
+{
+    if (string.IsNullOrWhiteSpace(opaqueCursor)) return null;
+
+    try
+    {
+        IDataProtector protector = GetProtector(entityPurpose);
+        string json = protector.Unprotect(opaqueCursor);
+        return JsonSerializer.Deserialize<KeysetCursorToken>(json);
+    }
+    catch (CryptographicException)
+    {
+        // Tampered, expired, or purpose-mismatched token
+        return null;
+    }
+    catch (Exception ex) when (ex is FormatException or JsonException)
+    {
+        // Malformed payload
+        return null;
+    }
+}
+```
+
+### The Result:
+When `Unprotect` returns `null`, KeysetEngine treats the request as a fresh query and returns **Page 1**. The application never throws unhandled 500 errors or leaks cryptographic stack traces to API consumers.
+
+---
+
+## Registration & Setup
+
+```csharp
+using KeysetEngine.DataProtection;
+
+// Standard ASP.NET Core Data Protection
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(@"/path/to/keys"))
+    .SetApplicationName("KeysetEngineDemo");
+
+// Register KeysetEngine Data Protection Protector
+builder.Services.AddKeysetDataProtection();
+```
+
+---
+
+## Testing Without Data Protection: `Base64UrlCursorProtector`
+
+For unit tests or scenarios where ASP.NET Core Data Protection keys are unavailable, `KeysetEngine.Core` provides `Base64UrlCursorProtector`:
+
+```csharp
+using KeysetEngine.Core;
+
+ICursorProtector protector = Base64UrlCursorProtector.Instance;
+```
+
+
+================================================================================
+FILE: databases/postgresql.md
+================================================================================
+
+# PostgreSQL Search Adapter
+
+`KeysetEngine.PostgreSql` provides PostgreSQL-optimized search strategies utilizing `EF.Functions.ILike` and PostgreSQL's built-in `tsvector` / `tsquery` full-text search engine.
+
+---
+
+## Installation
+
+```bash
+dotnet add package KeysetEngine.PostgreSql
+```
+
+---
+
+## 1. Case-Insensitive Pattern Search (`ILike`)
+
+By default, universal search emits `ToLower().Contains()`, which can prevent index usage in PostgreSQL.
+
+`PostgreSqlSearchStrategy` translates property searches into PostgreSQL's native `ILIKE` operator:
+
+```csharp
+// Program.cs
+builder.Services.AddKeysetPagination(options =>
+{
+    // Set ILIKE as the default search strategy across all entities
+    options.UsePostgreSqlSearch();
+
+    options.Configure<Customer>(b => b
+        .SortBy(x => x.CreatedAt)
+        .TieBreakBy(x => x.Id)
+        .SearchIn(x => x.FullName, x => x.Email));
+});
+```
+
+### Generated SQL
+```sql
+WHERE ("FullName" ILIKE ('%' || @term || '%')) OR ("Email" ILIKE ('%' || @term || '%'))
+```
+
+### PostgreSQL Index Recommendation: `pg_trgm` GIN Index
+To accelerate substring searches with `ILIKE`, enable the `pg_trgm` extension and add GIN trigram indexes:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX "IX_Customers_FullName_Trgm" ON "Customers" USING GIN ("FullName" gin_trgm_ops);
+CREATE INDEX "IX_Customers_Email_Trgm" ON "Customers" USING GIN ("Email" gin_trgm_ops);
+```
+
+---
+
+## 2. Full-Text Search with `tsvector`
+
+For advanced full-text linguistic matching (stemming, dictionaries, stop words), use `UsePostgreSqlTsVectorSearch()`:
+
+```csharp
+// Program.cs
+builder.Services.AddKeysetPagination(options =>
+{
+    // Configures tsvector search with the "english" dictionary (default)
+    options.UsePostgreSqlTsVectorSearch(regConfig: "english");
+});
+```
+
+### Generated SQL
+```sql
+WHERE to_tsvector('english', "FullName") @@ plainto_tsquery('english', @term)
+```
+
+### PostgreSQL GIN Index for `to_tsvector`
+```sql
+CREATE INDEX "IX_Customers_FullName_FTS" 
+ON "Customers" USING GIN (to_tsvector('english', "FullName"));
+```
+
+
+================================================================================
+FILE: databases/sqlserver.md
+================================================================================
+
+# SQL Server Search Adapter
+
+`KeysetEngine.SqlServer` provides Microsoft SQL Server-optimized search strategies utilizing SQL Server Full-Text Search (`FREETEXT` / `CONTAINS`) and default collation-aware filtering.
+
+---
+
+## Installation
+
+```bash
+dotnet add package KeysetEngine.SqlServer
+```
+
+---
+
+## 1. Full-Text Search Strategy (`FREETEXT` & `CONTAINS`)
+
+To query SQL Server Full-Text Catalogs via `EF.Functions.FreeText()` or `EF.Functions.Contains()`:
+
+```csharp
+// Program.cs
+builder.Services.AddKeysetPagination(options =>
+{
+    // Use FREETEXT (default)
+    options.UseSqlServerFullTextSearch(useContains: false);
+
+    // Or use CONTAINS for prefix / boolean matching:
+    // options.UseSqlServerFullTextSearch(useContains: true);
+
+    options.Configure<Product>(b => b
+        .SortBy(x => x.Price)
+        .TieBreakBy(x => x.Id)
+        .SearchIn(x => x.Name, x => x.Description));
+});
+```
+
+### Generated T-SQL
+When `useContains: false` (FREETEXT):
+```sql
+WHERE FREETEXT([p].[Name], @term) OR FREETEXT([p].[Description], @term)
+```
+
+When `useContains: true` (CONTAINS):
+```sql
+WHERE CONTAINS([p].[Name], @term) OR CONTAINS([p].[Description], @term)
+```
+
+::: warning SQL Server Requirement
+`FREETEXT` and `CONTAINS` require an active SQL Server Full-Text Catalog and Full-Text Index on the target columns.
+:::
+
+---
+
+## 2. Collation-Aware Search Strategy
+
+Standard SQL Server databases typically use a case-insensitive collation (such as `SQL_Latin1_General_CP1_CI_AS`). Calling `.ToLower()` in LINQ forces SQL Server to evaluate functions on every row, preventing index seeks.
+
+`SqlServerCollationSearchStrategy` emits standard SQL `LIKE` expressions without calling `ToLower()`, allowing SQL Server to leverage column collations and indexes:
+
+```csharp
+// Program.cs
+builder.Services.AddKeysetPagination(options =>
+{
+    options.UseSqlServerCollationSearch();
+});
+```
+
+### Generated T-SQL
+```sql
+WHERE [p].[Name] LIKE ('%' + @term + '%') OR [p].[Description] LIKE ('%' + @term + '%')
+```
+
+
+================================================================================
+FILE: databases/sqlite.md
+================================================================================
+
+# SQLite & In-Memory Testing
+
+`KeysetEngine.Core` includes built-in universal search and comparison strategies that function out of the box with **SQLite** and in-memory LINQ datasets without needing additional database-specific packages.
+
+---
+
+## Universal Behavior in SQLite
+
+Because SQLite does not require specialized full-text packages for standard queries, the default `DefaultSearchStrategy` in `KeysetEngine.Core` emits:
+
+```csharp
+x.Property.ToLower().Contains(term.ToLower())
+```
+
+Which EF Core translates to SQLite as:
+```sql
+WHERE instr(lower("Property"), lower(@term)) > 0
+```
+
+And KeysetEngine's universal nested boolean disjunctions:
+```sql
+WHERE ("CreatedAt" < @val) OR ("CreatedAt" = @val AND "Id" < @tieVal)
+```
+work flawlessly on SQLite B-Tree indexes!
+
+---
+
+## Writing Integration Tests with SQLite
+
+You can test keyset pagination flows quickly in your CI pipelines using SQLite in-memory:
+
+```csharp
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using KeysetEngine.Core;
+using KeysetEngine.Core.Configuration;
+
+// 1. Create SQLite in-memory connection
+using var connection = new SqliteConnection("DataSource=:memory:");
+connection.Open();
+
+var options = new DbContextOptionsBuilder<AppDbContext>()
+    .UseSqlite(connection)
+    .Options;
+
+using var db = new AppDbContext(options);
+db.Database.EnsureCreated();
+
+// 2. Configure keyset configuration
+var config = new KeysetConfigBuilder<Order>()
+    .SortBy(x => x.CreatedAt, ascending: false)
+    .TieBreakBy(x => x.Id)
+    .Build();
+
+// 3. Paginate
+var page1 = await db.Orders
+    .ToKeysetPageAsync(
+        new KeysetRequest(Limit: 10),
+        config,
+        Base64UrlCursorProtector.Instance);
+
+Assert.Equal(10, page1.Items.Count);
+Assert.True(page1.HasNextPage);
+```
+
+::: tip Fast CI Testing
+Using SQLite in-memory allows you to write lightning-fast unit and integration tests without spinning up Docker containers or external database servers.
+:::
+
+
+================================================================================
+FILE: api/core.md
+================================================================================
+
+# KeysetEngine.Core API Reference
+
+Namespace: `KeysetEngine.Core` & `KeysetEngine.Core.Configuration`
+
+---
+
+## Records
+
+### `KeysetRequest`
+Encapsulates incoming pagination and search query parameters.
+
+```csharp
+public sealed record KeysetRequest(
+    string? Cursor = null,
+    PageDirection Direction = PageDirection.Forward,
+    int Limit = 20,
+    string? Search = null
+);
+```
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `Cursor` | `string?` | `null` | The opaque cursor token identifying the page boundary. |
+| `Direction` | `PageDirection` | `PageDirection.Forward` | `PageDirection.Forward` or `PageDirection.Backward`. |
+| `Limit` | `int` | `20` | Maximum number of items requested per page (minimum 1). |
+| `Search` | `string?` | `null` | Optional text search term to filter results. |
+
+---
+
+### `KeysetPage<T>`
+Immutable envelope returned by `ToKeysetPageAsync`.
+
+```csharp
+public sealed record KeysetPage<T>(
+    IReadOnlyList<T> Items,
+    string? StartCursor,
+    string? EndCursor,
+    bool HasNextPage,
+    bool HasPreviousPage
+);
+```
+
+| Property | Type | Description |
+| :--- | :--- | :--- |
+| `Items` | `IReadOnlyList<T>` | The requested page slice in natural chronological order. |
+| `StartCursor` | `string?` | Cursor identifying the first item in the slice. |
+| `EndCursor` | `string?` | Cursor identifying the last item in the slice. |
+| `HasNextPage` | `bool` | True if more items exist in the forward direction. |
+| `HasPreviousPage` | `bool` | True if preceding items exist in the backward direction. |
+
+---
+
+### `KeysetCursorToken`
+Internal data contract serialized within opaque cursor tokens.
+
+```csharp
+public sealed record KeysetCursorToken(
+    string SortValueJson,
+    string TieBreakerValueJson,
+    bool IsAscending,
+    string? SearchHash
+);
+```
+
+---
+
+## Enums
+
+### `PageDirection`
+```csharp
+public enum PageDirection
+{
+    Forward,
+    Backward
+}
+```
+
+---
+
+## Classes & Builders
+
+### `KeysetConfigBuilder<T>`
+Fluent builder for constructing immutable entity keyset configurations.
+
+#### Methods
+- **`SortBy<TSort>(Expression<Func<T, TSort>> sortSelector, bool ascending = true)`**: Configures the primary sort column and direction. Validates that the property is non-nullable.
+- **`TieBreakBy<TTie>(Expression<Func<T, TTie>> tieBreakerSelector)`**: Configures the unique tie-breaker property (typically primary key). Validates that the property is non-nullable.
+- **`SearchIn(params Expression<Func<T, string?>>[] searchSelectors)`**: Configures string properties to include in dynamic text search.
+- **`UseSearchStrategy(ISearchStrategy searchStrategy)`**: Overrides the default search strategy for this entity.
+- **`WithEntityPurpose(string purpose)`**: Sets a custom purpose string for Data Protection isolation.
+- **`Build()`**: Validates configuration invariants and returns the compiled `KeysetConfig<T>`.
+
+---
+
+### `KeysetQueryableExtensions`
+
+#### Extension Methods
+```csharp
+public static Task<KeysetPage<T>> ToKeysetPageAsync<T>(
+    this IQueryable<T> source,
+    KeysetRequest request,
+    ICursorProtector cursorProtector,
+    CancellationToken cancellationToken = default);
+
+public static Task<KeysetPage<T>> ToKeysetPageAsync<T>(
+    this IQueryable<T> source,
+    KeysetRequest request,
+    KeysetConfig<T> config,
+    ICursorProtector cursorProtector,
+    CancellationToken cancellationToken = default);
+```
+
+---
+
+### `KeysetServiceCollectionExtensions`
+
+```csharp
+public static IServiceCollection AddKeysetPagination(
+    this IServiceCollection services,
+    Action<KeysetEngineOptions>? configure = null);
+```
+
+Registers entity configurations in `KeysetConfigRegistry` and sets application-wide search options.
+
+
+================================================================================
+FILE: api/data-protection.md
+================================================================================
+
+# KeysetEngine.DataProtection API Reference
+
+Namespace: `KeysetEngine.DataProtection`
+
+---
+
+## Interfaces
+
+### `ICursorProtector`
+Abstraction for encrypting and decrypting keyset cursor tokens.
+
+```csharp
+namespace KeysetEngine.Core;
+
+public interface ICursorProtector
+{
+    string Protect(KeysetCursorToken token, string entityPurpose);
+    KeysetCursorToken? Unprotect(string? opaqueCursor, string entityPurpose);
+}
+```
+
+---
+
+## Implementations
+
+### `DataProtectionCursorProtector`
+Protects and unprotects cursor tokens using ASP.NET Core Data Protection (`IDataProtectionProvider`).
+
+```csharp
+public sealed class DataProtectionCursorProtector : ICursorProtector
+{
+    public DataProtectionCursorProtector(IDataProtectionProvider provider);
+
+    public string Protect(KeysetCursorToken token, string entityPurpose);
+    public KeysetCursorToken? Unprotect(string? opaqueCursor, string entityPurpose);
+}
+```
+
+#### Behavior
+- Uses sub-purpose hierarchy: `provider.CreateProtector("KeysetEngine", entityPurpose, "v1")`.
+- Resiliently catches `CryptographicException`, `FormatException`, and `JsonException`, returning `null` rather than throwing errors.
+
+---
+
+### `Base64UrlCursorProtector`
+Lightweight, non-cryptographic implementation available in `KeysetEngine.Core` for testing.
+
+```csharp
+public sealed class Base64UrlCursorProtector : ICursorProtector
+{
+    public static Base64UrlCursorProtector Instance { get; }
+}
+```
+
+---
+
+## Dependency Injection Extensions
+
+### `KeysetDataProtectionServiceCollectionExtensions`
+
+```csharp
+public static IServiceCollection AddKeysetDataProtection(this IServiceCollection services);
+```
+
+Registers `DataProtectionCursorProtector` as a singleton implementation of `ICursorProtector`.
+Requires `services.AddDataProtection()` to be configured.
+
+
+================================================================================
+FILE: api/postgresql.md
+================================================================================
+
+# KeysetEngine.PostgreSql API Reference
+
+Namespace: `KeysetEngine.PostgreSql`
+
+---
+
+## Classes
+
+### `PostgreSqlSearchStrategy`
+Search strategy utilizing PostgreSQL `EF.Functions.ILike`.
+
+```csharp
+public sealed class PostgreSqlSearchStrategy : ISearchStrategy
+{
+    public static PostgreSqlSearchStrategy Instance { get; }
+
+    public Expression BuildPredicate(Expression propertyAccess, string searchTerm);
+}
+```
+
+Translates to:
+```sql
+property ILIKE ('%' || searchTerm || '%')
+```
+
+---
+
+### `PostgreSqlTsVectorSearchStrategy`
+Search strategy utilizing PostgreSQL `tsvector` and `to_tsquery`.
+
+```csharp
+public sealed class PostgreSqlTsVectorSearchStrategy : ISearchStrategy
+{
+    public PostgreSqlTsVectorSearchStrategy(string regConfig = "english");
+
+    public Expression BuildPredicate(Expression propertyAccess, string searchTerm);
+}
+```
+
+Translates to:
+```sql
+to_tsvector(regConfig, property) @@ plainto_tsquery(regConfig, searchTerm)
+```
+
+---
+
+## Dependency Injection Extensions
+
+### `KeysetEnginePostgreSqlExtensions`
+
+```csharp
+public static KeysetEngineOptions UsePostgreSqlSearch(
+    this KeysetEngineOptions options);
+
+public static KeysetEngineOptions UsePostgreSqlTsVectorSearch(
+    this KeysetEngineOptions options, 
+    string regConfig = "english");
+```
+
+
+================================================================================
+FILE: api/sqlserver.md
+================================================================================
+
+# KeysetEngine.SqlServer API Reference
+
+Namespace: `KeysetEngine.SqlServer`
+
+---
+
+## Classes
+
+### `SqlServerFullTextSearchStrategy`
+Search strategy utilizing SQL Server `EF.Functions.FreeText` or `EF.Functions.Contains`.
+
+```csharp
+public sealed class SqlServerFullTextSearchStrategy : ISearchStrategy
+{
+    public SqlServerFullTextSearchStrategy(bool useContains = false);
+
+    public Expression BuildPredicate(Expression propertyAccess, string searchTerm);
+}
+```
+
+Translates to:
+- `useContains == false`: `FREETEXT(property, searchTerm)`
+- `useContains == true`: `CONTAINS(property, searchTerm)`
+
+---
+
+### `SqlServerCollationSearchStrategy`
+Search strategy leveraging SQL Server's default case-insensitive collation without calling `ToLower()`.
+
+```csharp
+public sealed class SqlServerCollationSearchStrategy : ISearchStrategy
+{
+    public static SqlServerCollationSearchStrategy Instance { get; }
+
+    public Expression BuildPredicate(Expression propertyAccess, string searchTerm);
+}
+```
+
+Translates to:
+```sql
+property LIKE ('%' + searchTerm + '%')
+```
+
+---
+
+## Dependency Injection Extensions
+
+### `KeysetEngineSqlServerExtensions`
+
+```csharp
+public static KeysetEngineOptions UseSqlServerFullTextSearch(
+    this KeysetEngineOptions options, 
+    bool useContains = false);
+
+public static KeysetEngineOptions UseSqlServerCollationSearch(
+    this KeysetEngineOptions options);
+```

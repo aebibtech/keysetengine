@@ -1,5 +1,9 @@
 # Cryptographic Protection & Cursor Tokens
 
+::: tip Direct Answer (Executive Summary)
+`KeysetEngine.DataProtection` protects cursor tokens using **ASP.NET Core Data Protection** (AES-256-GCM / HMAC-SHA256 authenticated encryption) with purpose isolation (`KeysetEngine:{entityPurpose}:v1`). It prevents internal primary key enumeration, cross-endpoint token reuse, and data leakage. When invalid or tampered tokens are supplied, it catches cryptographic exceptions and gracefully resets pagination to Page 1 instead of throwing 500 errors.
+:::
+
 Exposing raw database keys, sequential IDs, or simple Base64-encoded timestamps in API cursor tokens presents serious security and architectural risks.
 
 ---

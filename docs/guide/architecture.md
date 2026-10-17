@@ -1,5 +1,9 @@
 # Pipeline & Expressions
 
+::: tip Direct Answer (Executive Summary)
+KeysetEngine compiles pagination queries dynamically into database-native LINQ expressions in five stages: (1) Decrypt cursor with `ICursorProtector`, (2) Append multi-column search predicate, (3) Append universal nested boolean keyset inequality (`(SortCol > val) OR (SortCol = val AND Id > tieVal)`), (4) Apply dynamic `OrderBy/ThenBy` with bidirectional inversion, and (5) Slice with `.Take(limit + 1)` to evaluate `HasNextPage` without running `COUNT(*)`.
+:::
+
 KeysetEngine translates incoming pagination requests and configuration definitions into pure, index-seekable LINQ expression trees without triggering EF Core client-side evaluation.
 
 ---

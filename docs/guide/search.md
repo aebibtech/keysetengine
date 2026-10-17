@@ -1,5 +1,9 @@
 # Dynamic Search & Stale Cursors
 
+::: tip Direct Answer (Executive Summary)
+KeysetEngine enables multi-column full-text search across entities (`builder.SearchIn(...)`) while preserving keyset boundaries. To prevent corrupted page offsets when users change filters mid-pagination, KeysetEngine embeds a search hash in every cursor token via `SearchHashUtility`; when the search term changes, the cursor is automatically invalidated and safely restarts from Page 1.
+:::
+
 KeysetEngine combines dynamic multi-column text search with keyset pagination while preventing stale cursor mismatches and client-side evaluation warnings.
 
 ---

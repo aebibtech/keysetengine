@@ -1,0 +1,96 @@
+# KeysetEngine
+
+> High-performance, database-agnostic keyset pagination and universal search library for .NET 8, .NET 9, and .NET 10 with Entity Framework Core.
+
+Keyset pagination avoids the O(N) execution degradation inherent to SQL `OFFSET` on deep datasets by establishing stable, indexed boundaries using composite keys and opaque cursors. KeysetEngine translates pagination and search directly into index seeks on PostgreSQL, SQL Server, and SQLite.
+
+- Repository: https://github.com/aebibtech/keysetengine
+- Documentation: https://keysetengine.aebibtech.com
+- Full Documentation Text: https://keysetengine.aebibtech.com/llms-full.txt
+- NuGet Packages:
+  - KeysetEngine.Core: https://www.nuget.org/packages/KeysetEngine.Core
+  - KeysetEngine.DataProtection: https://www.nuget.org/packages/KeysetEngine.DataProtection
+  - KeysetEngine.PostgreSql: https://www.nuget.org/packages/KeysetEngine.PostgreSql
+  - KeysetEngine.SqlServer: https://www.nuget.org/packages/KeysetEngine.SqlServer
+
+---
+
+## Core Mental Model & Principles
+
+1. **Why SQL OFFSET Fails**: `OFFSET 100000 LIMIT 20` scans and sorts 100,020 rows before discarding the first 100,000, causing O(N) latency spikes and buffer thrashing.
+2. **How Keyset Pagination Works**: Replaces numerical offsets with value-based boundary conditions: `WHERE (SortCol < @val) OR (SortCol = @val AND Id < @tieVal)`.
+3. **Universal Nested Booleans**: Emits standard boolean trees instead of C# tuples or SQL row-value syntax `(a, b) > (x, y)` so queries translate cleanly across PostgreSQL, SQL Server, SQLite, and MySQL without client-side evaluation.
+4. **N+1 Slicing**: Fetches `limit + 1` rows to detect `HasNextPage` and `HasPreviousPage` in a single SQL query roundtrip, eliminating expensive `COUNT(*)` queries.
+5. **Bidirectional Traversal**: Inverts comparison operators and SQL `ORDER BY` for backward navigation, automatically restoring chronological order via in-memory reversal before returning.
+6. **Cryptographic Protection**: Serializes edge cursors into opaque, authenticated AES-256-GCM / HMAC-SHA256 tokens using ASP.NET Core Data Protection with entity/tenant sub-purpose scoping.
+7. **Stale Cursor Invalidation**: Non-cryptographic query signature hashing (`SearchHashUtility`) resets pagination to Page 1 whenever search filters change between requests, preventing corrupted slices.
+
+---
+
+## Minimal API Quickstart
+
+```csharp
+// Program.cs
+using KeysetEngine.Core.Configuration;
+using KeysetEngine.DataProtection;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddDataProtection();
+builder.Services.AddKeysetDataProtection();
+
+builder.Services.AddKeysetPagination(options =>
+{
+    options.Configure<Order>(b => b
+        .SortBy(x => x.CreatedAt, ascending: false)
+        .TieBreakBy(x => x.Id)
+        .SearchIn(x => x.CustomerName, x => x.OrderNumber));
+});
+
+var app = builder.Build();
+
+app.MapGet("/api/orders", async (
+    [AsParameters] KeysetRequest request,
+    AppDbContext db,
+    ICursorProtector protector,
+    CancellationToken ct) =>
+{
+    var page = await db.Orders
+        .AsNoTracking()
+        .ToKeysetPageAsync(request, protector, ct);
+
+    return Results.Ok(page);
+});
+
+app.Run();
+```
+
+---
+
+## Documentation Index
+
+### Guides & Architecture
+- [Overview & Quickstart](https://keysetengine.aebibtech.com/guide/getting-started): Installation, packages, and 3-step minimal API setup.
+- [Why Keyset Pagination?](https://keysetengine.aebibtech.com/guide/why-keyset): Performance comparison with SQL OFFSET, O(1) index seeks, and concurrency safety.
+- [Frequently Asked Questions (FAQ)](https://keysetengine.aebibtech.com/guide/faq): Comprehensive answers to common architecture and implementation questions.
+- [Pipeline & Expressions](https://keysetengine.aebibtech.com/guide/architecture): Dynamic expression generation, nested booleans, and N+1 slicing.
+- [Bidirectional Traversal](https://keysetengine.aebibtech.com/guide/bidirectional): Forward and backward pagination with automated in-memory reversal.
+- [Dynamic Search & Stale Cursors](https://keysetengine.aebibtech.com/guide/search): Multi-column search and automatic stale cursor invalidation.
+- [Index Design & Optimization](https://keysetengine.aebibtech.com/guide/indexing): Composite B-tree index rules for PostgreSQL, SQL Server, and multi-tenant partitioning.
+
+### Security
+- [Cryptographic Protection](https://keysetengine.aebibtech.com/security/data-protection): ASP.NET Core Data Protection, sub-purpose isolation, and graceful fallback.
+
+### Database Adapters
+- [PostgreSQL Adapter](https://keysetengine.aebibtech.com/databases/postgresql): `EF.Functions.ILike` with pg_trgm and `to_tsvector` full-text search.
+- [SQL Server Adapter](https://keysetengine.aebibtech.com/databases/sqlserver): `FREETEXT`, `CONTAINS`, and collation-aware search.
+- [SQLite & In-Memory](https://keysetengine.aebibtech.com/databases/sqlite): Local development and lightning-fast CI test setup.
+
+### API Reference
+- [KeysetEngine.Core](https://keysetengine.aebibtech.com/api/core): `KeysetRequest`, `KeysetPage<T>`, `KeysetConfigBuilder<T>`, `ToKeysetPageAsync`.
+- [KeysetEngine.DataProtection](https://keysetengine.aebibtech.com/api/data-protection): `ICursorProtector`, `DataProtectionCursorProtector`, `Base64UrlCursorProtector`.
+- [KeysetEngine.PostgreSql](https://keysetengine.aebibtech.com/api/postgresql): `PostgreSqlSearchStrategy`, `PostgreSqlTsVectorSearchStrategy`, extensions.
+- [KeysetEngine.SqlServer](https://keysetengine.aebibtech.com/api/sqlserver): `SqlServerFullTextSearchStrategy`, `SqlServerCollationSearchStrategy`, extensions.
+
+### Full Context File for LLMs
+- [Complete Documentation (One-Shot Context)](https://keysetengine.aebibtech.com/llms-full.txt): Complete concatenated documentation in a single clean Markdown file.

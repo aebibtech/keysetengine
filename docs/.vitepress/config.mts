@@ -1,5 +1,31 @@
 import { defineConfig } from 'vitepress';
 
+const jsonLd = JSON.stringify({
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'SoftwareSourceCode',
+      'name': 'KeysetEngine',
+      'description': 'High-performance, database-agnostic keyset pagination and universal search library for .NET 8, 9, and 10 with Entity Framework Core.',
+      'programmingLanguage': 'C#',
+      'runtimePlatform': ['.NET 8.0', '.NET 9.0', '.NET 10.0'],
+      'codeRepository': 'https://github.com/aebibtech/keysetengine',
+      'license': 'https://opensource.org/licenses/MIT',
+      'author': {
+        '@type': 'Person',
+        'name': 'Paul Abib Camano',
+        'url': 'https://github.com/aebibtech'
+      }
+    },
+    {
+      '@type': 'WebSite',
+      'name': 'KeysetEngine Documentation',
+      'url': 'https://keysetengine.aebibtech.com',
+      'description': 'Complete guides, architectural specifications, and API documentation for KeysetEngine .NET pagination library.'
+    }
+  ]
+});
+
 export default defineConfig({
   title: 'KeysetEngine',
   description: 'High-performance, database-agnostic keyset pagination and search engine for .NET and EF Core',
@@ -8,12 +34,25 @@ export default defineConfig({
   lastUpdated: true,
   cleanUrls: true,
 
+  sitemap: {
+    hostname: 'https://keysetengine.aebibtech.com'
+  },
+
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
-    ['meta', { name: 'theme-color', content: '#3eaf7c' }],
+    ['link', { rel: 'canonical', href: 'https://keysetengine.aebibtech.com' }],
+    ['meta', { name: 'theme-color', content: '#2563eb' }],
+    ['meta', { name: 'author', content: 'Paul Abib Camano' }],
+    ['meta', { name: 'keywords', content: '.NET, Keyset Pagination, Cursor Pagination, EF Core, Entity Framework Core, PostgreSQL, SQL Server, SQLite, High Performance, C#, ASP.NET Core' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'KeysetEngine — .NET Keyset Pagination' }],
-    ['meta', { property: 'og:description', content: 'High-Performance Keyset Pagination & Search for .NET and EF Core' }]
+    ['meta', { property: 'og:site_name', content: 'KeysetEngine' }],
+    ['meta', { property: 'og:title', content: 'KeysetEngine — .NET Keyset Pagination & Search' }],
+    ['meta', { property: 'og:description', content: 'High-Performance Keyset Pagination & Search for .NET and EF Core. Avoid SQL OFFSET degradation with O(1) indexed seeks.' }],
+    ['meta', { property: 'og:url', content: 'https://keysetengine.aebibtech.com' }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:title', content: 'KeysetEngine — .NET Keyset Pagination & Search' }],
+    ['meta', { name: 'twitter:description', content: 'High-Performance Keyset Pagination & Search for .NET and EF Core.' }],
+    ['script', { type: 'application/ld+json' }, jsonLd]
   ],
 
   themeConfig: {
@@ -22,9 +61,11 @@ export default defineConfig({
 
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'FAQ', link: '/guide/faq' },
       { text: 'Databases', link: '/databases/postgresql' },
       { text: 'Security', link: '/security/data-protection' },
       { text: 'API Reference', link: '/api/core' },
+      { text: 'llms.txt', link: '/llms.txt', target: '_blank' },
       {
         text: 'NuGet',
         items: [
@@ -41,7 +82,8 @@ export default defineConfig({
         text: 'Getting Started',
         items: [
           { text: 'Overview & Installation', link: '/guide/getting-started' },
-          { text: 'Why Keyset Pagination?', link: '/guide/why-keyset' }
+          { text: 'Why Keyset Pagination?', link: '/guide/why-keyset' },
+          { text: 'Frequently Asked Questions', link: '/guide/faq' }
         ]
       },
       {

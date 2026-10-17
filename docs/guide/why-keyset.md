@@ -1,5 +1,9 @@
 # Why Keyset Pagination?
 
+::: tip Direct Answer (Executive Summary)
+**SQL OFFSET degrades linearly $O(N)$** because database engines must scan and discard all preceding rows (e.g. `OFFSET 100000` scans 100,020 rows), causing high latency, CPU spikes, and data drift during concurrent writes. **Keyset pagination runs in constant time $O(1)$** by seeking directly to index boundaries via values (`WHERE CreatedAt < @lastDate`). KeysetEngine eliminates SQL OFFSET performance cliffs while preventing missing or duplicate rows.
+:::
+
 Traditional offset-based pagination (using `.Skip(page * pageSize).Take(pageSize)` in LINQ or `OFFSET x ROWS FETCH NEXT y ROWS` in SQL) suffers from fatal scalability and concurrency issues when querying modern, high-volume datasets.
 
 ---

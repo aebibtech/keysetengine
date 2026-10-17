@@ -1,5 +1,9 @@
 # Overview & Installation
 
+::: tip Direct Answer (Executive Summary)
+**KeysetEngine** is a high-performance keyset pagination and search engine for .NET 8, 9, and 10 with Entity Framework Core. It replaces $O(N)$ SQL `OFFSET` with $O(1)$ composite index seeks (`WHERE SortCol < @val OR (SortCol = @val AND Id < @tieVal)`). It features cryptographic cursor encryption via ASP.NET Core Data Protection, automatic stale-cursor invalidation, and native database adapters for PostgreSQL and SQL Server.
+:::
+
 **KeysetEngine** is a high-throughput, database-agnostic keyset pagination and search engine for .NET and Entity Framework Core. It targets modern LTS and Current .NET runtimes: **.NET 8.0**, **.NET 9.0**, and **.NET 10.0**.
 
 ---

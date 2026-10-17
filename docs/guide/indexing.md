@@ -1,5 +1,9 @@
 # Index Design & Optimization
 
+::: tip Direct Answer (Executive Summary)
+Keyset pagination requires a **composite B-Tree index** on `(SortColumn, TieBreakerColumn)` (e.g. `(CreatedAt DESC, Id DESC)`). For multi-tenant databases, the tenant partition ID must be the leading column: `(TenantId, SortColumn, TieBreaker)`. This allows the database engine to perform an immediate **Index Seek** directly to the requested page boundary in $< 1\text{ms}$.
+:::
+
 To achieve true $O(1)$ query latency with KeysetEngine, relational database engines require properly designed composite B-Tree indexes matching your sort order and tie-breaker definitions.
 
 ---
