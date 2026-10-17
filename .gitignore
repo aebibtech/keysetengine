@@ -28,3 +28,8 @@ packages/
 ## OS
 .DS_Store
 Thumbs.db
+
+## Node & VitePress
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
