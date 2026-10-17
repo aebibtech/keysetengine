@@ -13,12 +13,12 @@
 
   <!-- Common Package Metadata & SourceLink Settings -->
   <PropertyGroup>
-    <Authors>Paul Camano, StewardAxis LLC</Authors>
-    <Company>StewardAxis LLC</Company>
-    <Copyright>Copyright (c) 2026 StewardAxis LLC</Copyright>
+    <Authors>Paul Abib Camano</Authors>
+    <Company>Aebibtech</Company>
+    <Copyright>Copyright (c) 2026 Aebibtech</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/stewardaxis/keysetengine</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/stewardaxis/keysetengine</RepositoryUrl>
+    <PackageProjectUrl>https://keysetengine.aebibtech.com</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/aebibtech/keysetengine</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
