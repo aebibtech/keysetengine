@@ -4,6 +4,9 @@
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <RootNamespace>KeysetEngine.PostgreSql</RootNamespace>
     <AssemblyName>KeysetEngine.PostgreSql</AssemblyName>
+    <PackageId>KeysetEngine.PostgreSql</PackageId>
+    <Description>PostgreSQL dialect search adapters for KeysetEngine using EF.Functions.ILike and tsvector full-text search.</Description>
+    <PackageTags>keyset;pagination;postgresql;npgsql;ilike;tsvector;fulltext;search;efcore</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

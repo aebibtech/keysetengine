@@ -1,0 +1,88 @@
+name: Release & Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_nuget:
+        description: 'Publish to NuGet.org (via Trusted Publishing OIDC)'
+        required: true
+        type: boolean
+        default: true
+      publish_github:
+        description: 'Publish to GitHub Packages'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write  # Required for NuGet.org Trusted Publishing OIDC token exchange
+  contents: write  # Required to create GitHub Releases and upload assets
+  packages: write  # Required to push packages to GitHub Packages registry
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  DOTNET_NOLOGO: "true"
+
+jobs:
+  release:
+    name: Build, Verify & Publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code with Git History
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDKs (8.0, 9.0, 10.0)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore Dependencies
+        run: dotnet restore KeysetEngine.sln
+
+      - name: Build Release Binaries
+        run: dotnet build KeysetEngine.sln -c Release --no-restore
+
+      - name: Run Test Verification Gate
+        run: |
+          dotnet test tests/KeysetEngine.Tests.Unit/KeysetEngine.Tests.Unit.csproj -c Release --no-build
+          dotnet test tests/KeysetEngine.Tests.Integration/KeysetEngine.Tests.Integration.csproj -c Release --no-build
+
+      - name: Pack NuGet Packages
+        run: dotnet pack KeysetEngine.sln -c Release --no-build --output ./artifacts
+
+      - name: Authenticate with NuGet.org (Trusted Publishing)
+        if: ${{ github.event_name == 'push' || inputs.publish_nuget == true }}
+        uses: nuget/login@v1
+        with:
+          source: https://api.nuget.org
+
+      - name: Publish to NuGet.org
+        if: ${{ github.event_name == 'push' || inputs.publish_nuget == true }}
+        run: dotnet nuget push ./artifacts/*.nupkg --source https://api.nuget.org --skip-duplicate
+
+      - name: Publish to GitHub Packages
+        if: ${{ github.event_name == 'push' || inputs.publish_github == true }}
+        run: |
+          dotnet nuget push ./artifacts/*.nupkg \
+            --api-key "${{ secrets.GITHUB_TOKEN }}" \
+            --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+            --skip-duplicate
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./artifacts/*.nupkg
+            ./artifacts/*.snupkg
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

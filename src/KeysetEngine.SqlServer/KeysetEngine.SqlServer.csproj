@@ -4,6 +4,9 @@
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <RootNamespace>KeysetEngine.SqlServer</RootNamespace>
     <AssemblyName>KeysetEngine.SqlServer</AssemblyName>
+    <PackageId>KeysetEngine.SqlServer</PackageId>
+    <Description>Microsoft SQL Server dialect search adapters for KeysetEngine using EF.Functions.FreeText, CONTAINS, and collation strategies.</Description>
+    <PackageTags>keyset;pagination;sqlserver;mssql;freetext;contains;fulltext;search;efcore</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

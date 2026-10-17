@@ -4,6 +4,9 @@
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <RootNamespace>KeysetEngine.Core</RootNamespace>
     <AssemblyName>KeysetEngine.Core</AssemblyName>
+    <PackageId>KeysetEngine.Core</PackageId>
+    <Description>High-performance, database-agnostic keyset pagination, expression tree builders, and universal search for Entity Framework Core.</Description>
+    <PackageTags>keyset;pagination;cursor;efcore;entityframework;performance;search;seek-pagination</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

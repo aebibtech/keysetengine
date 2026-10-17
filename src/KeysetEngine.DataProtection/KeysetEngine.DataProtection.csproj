@@ -4,6 +4,9 @@
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <RootNamespace>KeysetEngine.DataProtection</RootNamespace>
     <AssemblyName>KeysetEngine.DataProtection</AssemblyName>
+    <PackageId>KeysetEngine.DataProtection</PackageId>
+    <Description>Cryptographic ASP.NET Core Data Protection cursor tokens with purpose and entity isolation for KeysetEngine.</Description>
+    <PackageTags>keyset;pagination;dataprotection;security;crypto;cursor-token;aspnetcore;encryption</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
