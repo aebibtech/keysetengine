@@ -11,6 +11,33 @@ namespace KeysetEngine.Core;
 public static class KeysetQueryableExtensions
 {
     /// <summary>
+    /// Executes keyset pagination on an <see cref="IQueryable{T}"/> using the registered <see cref="KeysetConfig{T}"/> in <see cref="KeysetConfigRegistry"/>.
+    /// </summary>
+    /// <typeparam name="T">The entity type.</typeparam>
+    /// <param name="source">The source queryable.</param>
+    /// <param name="request">The incoming pagination request.</param>
+    /// <param name="cursorProtector">The cursor encryption/serialization provider.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A <see cref="KeysetPage{T}"/> envelope containing the page slice and edge boundary cursors.</returns>
+    public static Task<KeysetPage<T>> ToKeysetPageAsync<T>(
+        this IQueryable<T> source,
+        KeysetRequest request,
+        ICursorProtector cursorProtector,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(cursorProtector);
+
+        KeysetConfig<T> config = KeysetConfigRegistry.Get<T>()
+            ?? throw new InvalidOperationException(
+                $"No KeysetConfig has been registered for entity '{typeof(T).Name}'. " +
+                $"Configure it via KeysetConfigRegistry.Register() or services.AddKeysetPagination().");
+
+        return source.ToKeysetPageAsync(request, config, cursorProtector, cancellationToken);
+    }
+
+    /// <summary>
     /// Executes keyset pagination on an <see cref="IQueryable{T}"/>, applying full-text search,
     /// dynamic keyset boundary predicates, bidirectional ordering, and N+1 slice evaluation.
     /// </summary>

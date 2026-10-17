@@ -38,10 +38,15 @@ public sealed class KeysetConfig<T>
     public ISearchStrategy SearchStrategy { get; }
 
     /// <summary>
-    /// Gets the optional entity purpose string used for cryptographic cursor isolation.
+    /// Gets the entity purpose string used for cryptographic cursor isolation.
     /// Defaults to the entity type name if not explicitly specified.
     /// </summary>
     public string EntityPurpose { get; }
+
+    /// <summary>
+    /// Gets the cached metadata definition, if constructed via builder.
+    /// </summary>
+    public KeysetDefinition? Definition { get; }
 
     /// <summary>
     /// Initializes a new instance of <see cref="KeysetConfig{T}"/>.
@@ -52,7 +57,8 @@ public sealed class KeysetConfig<T>
         bool isAscending = true,
         IEnumerable<LambdaExpression>? searchSelectors = null,
         ISearchStrategy? searchStrategy = null,
-        string? entityPurpose = null)
+        string? entityPurpose = null,
+        KeysetDefinition? definition = null)
     {
         ArgumentNullException.ThrowIfNull(sortSelector);
         ArgumentNullException.ThrowIfNull(tieBreakerSelector);
@@ -63,6 +69,7 @@ public sealed class KeysetConfig<T>
         SearchSelectors = searchSelectors?.ToList().AsReadOnly() ?? (IReadOnlyList<LambdaExpression>)Array.Empty<LambdaExpression>();
         SearchStrategy = searchStrategy ?? DefaultSearchStrategy.Instance;
         EntityPurpose = string.IsNullOrWhiteSpace(entityPurpose) ? typeof(T).Name : entityPurpose;
+        Definition = definition;
 
         _sortGetter = CompileGetter(sortSelector);
         _tieBreakerGetter = CompileGetter(tieBreakerSelector);
