@@ -58,16 +58,22 @@ jobs:
 
       - name: Pack NuGet Packages
         run: dotnet pack KeysetEngine.sln -c Release --no-build --output ./artifacts
-
-      - name: Authenticate with NuGet.org (Trusted Publishing)
-        if: ${{ github.event_name == 'push' || inputs.publish_nuget == true }}
-        uses: nuget/login@v1
+      
+      - name: Authenticate with NuGet (Trusted Publishing)
+        id: nuget-login
+        uses: NuGet/login@v1
         with:
-          source: https://api.nuget.org
+          user: ${{ vars.NUGET_USERNAME || 'aebibtech' }}
 
-      - name: Publish to NuGet.org
-        if: ${{ github.event_name == 'push' || inputs.publish_nuget == true }}
-        run: dotnet nuget push ./artifacts/*.nupkg --source https://api.nuget.org --skip-duplicate
+      - name: Publish Packages to NuGet.org
+        run: |
+          for pkg in ./artifacts/*.nupkg; do
+            echo "Publishing $(basename "$pkg") to NuGet.org via Trusted Publishing..."
+            dotnet nuget push "$pkg" \
+              --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+              --source "https://api.nuget.org/v3/index.json" \
+              --skip-duplicate
+          done
 
       - name: Publish to GitHub Packages
         if: ${{ github.event_name == 'push' || inputs.publish_github == true }}
