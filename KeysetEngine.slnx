@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KeysetEngine.Core/KeysetEngine.Core.csproj" />
+    <Project Path="src/KeysetEngine.DataProtection/KeysetEngine.DataProtection.csproj" />
+    <Project Path="src/KeysetEngine.PostgreSql/KeysetEngine.PostgreSql.csproj" />
+    <Project Path="src/KeysetEngine.SqlServer/KeysetEngine.SqlServer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KeysetEngine.Tests.Integration/KeysetEngine.Tests.Integration.csproj" />
+    <Project Path="tests/KeysetEngine.Tests.Unit/KeysetEngine.Tests.Unit.csproj" />
+  </Folder>
+</Solution>
