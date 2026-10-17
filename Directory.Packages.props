@@ -58,6 +58,6 @@
     <PackageVersion Include="SQLitePCLRaw.core" Version="2.1.14" />
     <PackageVersion Include="SSH.NET" Version="2026.0.0" />
     <!-- Tooling & Versioning -->
-    <PackageVersion Include="MinVer" Version="6.0.0" />
+    <PackageVersion Include="MinVer" Version="8.0.0" />
   </ItemGroup>
 </Project>
