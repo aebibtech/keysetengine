@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
+using KeysetEngine.Core.Search;
 
 namespace KeysetEngine.Core.Expressions;
 
@@ -146,6 +147,82 @@ public static class KeysetExpressionBuilder
             token.IsAscending,
             direction);
     }
+
+    /// <summary>
+    /// Combines multiple property search selectors into a single disjunctive lambda (x.Col1.Contains(...) || x.Col2.Contains(...)).
+    /// Returns null if searchTerm is null/whitespace or if no search selectors are provided.
+    /// </summary>
+    /// <typeparam name="T">The entity type.</typeparam>
+    /// <param name="searchSelectors">Collection of lambda expressions selecting string properties.</param>
+    /// <param name="searchTerm">The text string to search for.</param>
+    /// <param name="searchStrategy">Optional search strategy (defaults to Universal DefaultSearchStrategy).</param>
+    /// <returns>A combined lambda expression, or null.</returns>
+    public static Expression<Func<T, bool>>? ApplySearch<T>(
+        IReadOnlyList<LambdaExpression>? searchSelectors,
+        string? searchTerm,
+        ISearchStrategy? searchStrategy = null)
+    {
+        if (string.IsNullOrWhiteSpace(searchTerm) || searchSelectors is null || searchSelectors.Count == 0)
+        {
+            return null;
+        }
+
+        ISearchStrategy strategy = searchStrategy ?? DefaultSearchStrategy.Instance;
+        ParameterExpression parameter = Expression.Parameter(typeof(T), "x");
+
+        Expression? combinedBody = null;
+
+        for (int i = 0; i < searchSelectors.Count; i++)
+        {
+            LambdaExpression selector = searchSelectors[i];
+            Expression propAccess = ParameterReplacementVisitor.Replace(selector.Parameters[0], parameter, selector.Body);
+            Expression predicate = strategy.BuildPredicate(propAccess, searchTerm);
+
+            combinedBody = combinedBody is null
+                ? predicate
+                : Expression.OrElse(combinedBody, predicate);
+        }
+
+        return combinedBody is null ? null : Expression.Lambda<Func<T, bool>>(combinedBody, parameter);
+    }
+
+    /// <summary>
+    /// Combines multiple target properties into a single disjunctive search lambda.
+    /// Returns null if searchTerm is null/whitespace or if no target properties are provided.
+    /// </summary>
+    /// <typeparam name="T">The entity type.</typeparam>
+    /// <param name="searchProperties">Collection of string properties on the entity.</param>
+    /// <param name="searchTerm">The text string to search for.</param>
+    /// <param name="searchStrategy">Optional search strategy (defaults to Universal DefaultSearchStrategy).</param>
+    /// <returns>A combined lambda expression, or null.</returns>
+    public static Expression<Func<T, bool>>? ApplySearch<T>(
+        IReadOnlyList<PropertyInfo>? searchProperties,
+        string? searchTerm,
+        ISearchStrategy? searchStrategy = null)
+    {
+        if (string.IsNullOrWhiteSpace(searchTerm) || searchProperties is null || searchProperties.Count == 0)
+        {
+            return null;
+        }
+
+        ISearchStrategy strategy = searchStrategy ?? DefaultSearchStrategy.Instance;
+        ParameterExpression parameter = Expression.Parameter(typeof(T), "x");
+
+        Expression? combinedBody = null;
+
+        for (int i = 0; i < searchProperties.Count; i++)
+        {
+            MemberExpression propAccess = Expression.Property(parameter, searchProperties[i]);
+            Expression predicate = strategy.BuildPredicate(propAccess, searchTerm);
+
+            combinedBody = combinedBody is null
+                ? predicate
+                : Expression.OrElse(combinedBody, predicate);
+        }
+
+        return combinedBody is null ? null : Expression.Lambda<Func<T, bool>>(combinedBody, parameter);
+    }
+
 
     private static BinaryExpression BuildComparison(Expression left, Expression right, bool greaterThan)
     {
