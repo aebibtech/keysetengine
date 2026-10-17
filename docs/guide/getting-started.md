@@ -1,7 +1,7 @@
 # Overview & Installation
 
 ::: tip Direct Answer (Executive Summary)
-**KeysetEngine** is a high-performance keyset pagination and search engine for .NET 8, 9, and 10 with Entity Framework Core. It replaces $O(N)$ SQL `OFFSET` with $O(1)$ composite index seeks (`WHERE SortCol < @val OR (SortCol = @val AND Id < @tieVal)`). It features cryptographic cursor encryption via ASP.NET Core Data Protection, automatic stale-cursor invalidation, and native database adapters for PostgreSQL and SQL Server.
+**KeysetEngine** is a high-performance keyset pagination and search engine for .NET 8, 9, and 10 with Entity Framework Core. It replaces $O(N)$ SQL `OFFSET` with $O(1)$ composite index seeks (`WHERE SortCol < @val OR (SortCol = @val AND Id < @tieVal)`). It supports two configuration styles: **Registry Configuration** (centralized via DI, requiring zero config objects at endpoints) and **Explicit Configuration** (direct `KeysetConfig<T>` instances, ideal for multiple sorting presets and CQRS handlers).
 :::
 
 **KeysetEngine** is a high-throughput, database-agnostic keyset pagination and search engine for .NET and Entity Framework Core. It targets modern LTS and Current .NET runtimes: **.NET 8.0**, **.NET 9.0**, and **.NET 10.0**.
@@ -50,11 +50,14 @@ dotnet add package KeysetEngine.SqlServer
 
 ## 3-Step Quickstart
 
-### Step 1: Register Services
+KeysetEngine supports two ways to configure entities: **Registry Configuration** (centralized via DI) and **Explicit Configuration** (standalone instance). Choose the tab that best matches your architecture below.
 
-In your application entry point (`Program.cs`), register KeysetEngine and configure your entity boundaries:
+### Step 1: Configure Keyset Boundaries
 
-```csharp
+::: code-group
+
+```csharp [Registry Configuration (Recommended)]
+// In Program.cs: Register DI and configure entities into KeysetConfigRegistry
 using KeysetEngine.Core.Configuration;
 using KeysetEngine.DataProtection;
 
@@ -64,7 +67,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDataProtection();
 builder.Services.AddKeysetDataProtection();
 
-// Register KeysetEngine and configure entity mappings
+// Register KeysetEngine and configure entity mappings centrally
 builder.Services.AddKeysetPagination(options =>
 {
     options.Configure<Order>(b => b
@@ -74,17 +77,39 @@ builder.Services.AddKeysetPagination(options =>
 });
 ```
 
-::: tip Explicit vs Registry Configuration
-Configuring entities via `options.Configure<T>()` registers them into `KeysetConfigRegistry`, allowing you to invoke `ToKeysetPageAsync(request, protector)` without passing the config instance to every endpoint.
+```csharp [Explicit Configuration]
+// Define a standalone KeysetConfig<T> (e.g., in your endpoint, service, or static helper)
+using KeysetEngine.Core.Configuration;
+using KeysetEngine.DataProtection;
+
+// Register services in Program.cs
+builder.Services.AddDataProtection();
+builder.Services.AddKeysetDataProtection();
+builder.Services.AddKeysetPagination();
+
+// Build an explicit immutable configuration instance
+public static class OrderKeysetDefinitions
+{
+    public static readonly KeysetConfig<Order> Default = new KeysetConfigBuilder<Order>()
+        .SortBy(x => x.CreatedAt, ascending: false)
+        .TieBreakBy(x => x.Id)
+        .SearchIn(x => x.CustomerName, x => x.OrderNumber)
+        .Build();
+}
+```
+
 :::
 
 ---
 
 ### Step 2: Define Endpoint with `KeysetRequest`
 
-Expose an endpoint accepting `[AsParameters] KeysetRequest`:
+Expose an endpoint accepting `[AsParameters] KeysetRequest` and invoke `ToKeysetPageAsync`:
 
-```csharp
+::: code-group
+
+```csharp [Using Registry]
+// No config object needed at the endpoint! It is resolved from KeysetConfigRegistry.
 app.MapGet("/api/orders", async (
     [AsParameters] KeysetRequest request,
     AppDbContext db,
@@ -99,11 +124,29 @@ app.MapGet("/api/orders", async (
 });
 ```
 
+```csharp [Using Explicit Config]
+// Pass the explicit KeysetConfig<Order> instance directly to the query.
+app.MapGet("/api/orders", async (
+    [AsParameters] KeysetRequest request,
+    AppDbContext db,
+    ICursorProtector protector,
+    CancellationToken ct) =>
+{
+    var page = await db.Orders
+        .AsNoTracking()
+        .ToKeysetPageAsync(request, OrderKeysetDefinitions.Default, protector, ct);
+
+    return Results.Ok(page);
+});
+```
+
+:::
+
 ---
 
 ### Step 3: Consume Paginated Response
 
-The returned `KeysetPage<T>` contains:
+The returned `KeysetPage<T>` contains the current slice and cryptographic edge cursors:
 
 ```json
 {
@@ -122,14 +165,100 @@ The returned `KeysetPage<T>` contains:
 }
 ```
 
-To fetch the next page, send the `endCursor` as the `cursor` query parameter:
+- **Next Page (Forward)**: Send the `endCursor` as `cursor`:
+  ```http
+  GET /api/orders?cursor=CfDJ8MvV2...&limit=20 HTTP/1.1
+  ```
+- **Previous Page (Backward)**: Send the `startCursor` with `direction=Backward`:
+  ```http
+  GET /api/orders?cursor=CfDJ8MvV2...&direction=Backward&limit=20 HTTP/1.1
+  ```
 
-```http
-GET /api/orders?cursor=CfDJ8MvV2...&limit=20 HTTP/1.1
+---
+
+## Registry vs. Explicit Configuration: When to Use Which?
+
+Both approaches provide identical $O(1)$ query performance and zero-cost runtime expression caching. Choose the style that best aligns with your application structure:
+
+| Dimension | Registry Configuration | Explicit Configuration |
+| :--- | :--- | :--- |
+| **Declaration Site** | `Program.cs` / `AddKeysetPagination(options => ...)` | `new KeysetConfigBuilder<T>()...Build()` (static field or class) |
+| **Endpoint Invocation** | `query.ToKeysetPageAsync(request, protector)` | `query.ToKeysetPageAsync(request, config, protector)` |
+| **Multiple Sort Presets** | One configuration per entity type | Multiple configurations per entity type |
+| **Ideal For** | Standard CRUD REST APIs, single-view dashboards | Multi-sort grids, CQRS/MediatR handlers, multi-tenant isolation |
+
+### Example: Multiple Sorting Presets on the Same Entity
+
+When an entity requires multiple distinct sort options (for example, sorting orders by `CreatedAt` vs. by `TotalAmount`), use **Explicit Configuration**:
+
+```csharp
+public static class OrderSortPresets
+{
+    // Preset 1: Newest to Oldest
+    public static readonly KeysetConfig<Order> ByDateDesc = new KeysetConfigBuilder<Order>()
+        .SortBy(x => x.CreatedAt, ascending: false)
+        .TieBreakBy(x => x.Id)
+        .SearchIn(x => x.CustomerName)
+        .Build();
+
+    // Preset 2: Highest to Lowest Amount
+    public static readonly KeysetConfig<Order> ByAmountDesc = new KeysetConfigBuilder<Order>()
+        .SortBy(x => x.TotalAmount, ascending: false)
+        .TieBreakBy(x => x.Id)
+        .SearchIn(x => x.CustomerName)
+        .Build();
+}
+
+// In Endpoint: Select preset based on query parameter
+app.MapGet("/api/orders", async (
+    [AsParameters] KeysetRequest request,
+    [FromQuery] string? sortBy,
+    AppDbContext db,
+    ICursorProtector protector,
+    CancellationToken ct) =>
+{
+    var config = sortBy?.ToLowerInvariant() == "amount"
+        ? OrderSortPresets.ByAmountDesc
+        : OrderSortPresets.ByDateDesc;
+
+    var page = await db.Orders
+        .AsNoTracking()
+        .ToKeysetPageAsync(request, config, protector, ct);
+
+    return Results.Ok(page);
+});
 ```
 
-To navigate backward, specify `direction=Backward` with the `startCursor`:
+### Example: CQRS / MediatR Query Handlers
 
-```http
-GET /api/orders?cursor=CfDJ8MvV2...&direction=Backward&limit=20 HTTP/1.1
+In CQRS architectures, encapsulating the keyset definition inside the query handler maintains clean separation of concerns:
+
+```csharp
+public record GetOrdersQuery(KeysetRequest Request) : IRequest<KeysetPage<OrderDto>>;
+
+public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, KeysetPage<OrderDto>>
+{
+    private static readonly KeysetConfig<Order> Keyset = new KeysetConfigBuilder<Order>()
+        .SortBy(x => x.CreatedAt, ascending: false)
+        .TieBreakBy(x => x.Id)
+        .SearchIn(x => x.CustomerName, x => x.OrderNumber)
+        .Build();
+
+    private readonly AppDbContext _db;
+    private readonly ICursorProtector _protector;
+
+    public GetOrdersQueryHandler(AppDbContext db, ICursorProtector protector)
+    {
+        _db = db;
+        _protector = protector;
+    }
+
+    public async Task<KeysetPage<OrderDto>> Handle(GetOrdersQuery query, CancellationToken ct)
+    {
+        return await _db.Orders
+            .AsNoTracking()
+            .Select(o => new OrderDto(o.Id, o.CustomerName, o.CreatedAt))
+            .ToKeysetPageAsync(query.Request, Keyset, _protector, ct);
+    }
+}
 ```
