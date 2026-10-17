@@ -83,7 +83,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/stewardaxis/keysetengine' }
+      { icon: 'github', link: 'https://github.com/aebibtech/keysetengine' }
     ],
 
     footer: {

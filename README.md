@@ -1,6 +1,6 @@
 # KeysetEngine
 
-[![CI](https://github.com/stewardaxis/keysetengine/actions/workflows/ci.yml/badge.svg)](https://github.com/stewardaxis/keysetengine/actions/workflows/ci.yml)
+[![CI](https://github.com/aebibtech/keysetengine/actions/workflows/ci.yml/badge.svg)](https://github.com/aebibtech/keysetengine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![NuGet](https://img.shields.io/nuget/v/KeysetEngine.Core.svg)](https://www.nuget.org/packages/KeysetEngine.Core)
 
